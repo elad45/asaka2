@@ -1,190 +1,175 @@
-import itertools
+# importing system module for reading files
 import sys
+import itertools
 
-#counter =0
-#true_clauses = []
 
+# in what follows, a *formula* is a collection of clauses,
+# a clause is a collection of literals,
+# and a literal is a non-zero integer.
+
+# input path:  a path to a cnf file
+# output: the formula represented by the file, 
+#         the number of variables, 
+#         and the number of clauses
 def parse_dimacs_path(path):
     cnf = []
-    num_vars = 0
-    num_clauses = 0
     try:
-        with open(path, 'r') as file:
-            for line in file:
-                tokens = line.split()
+        with open(path, 'r') as f:
+            lines = f.readlines()
 
-                # Skip comments
-                if len(tokens) > 0 and tokens[0] == 'c':
-                    continue
+            # Parse header line
+            header = lines[0].strip().split()
+            n_vars = int(header[2])
+            m_clauses = int(header[3])
 
-                # Read the number of variables and clauses
-                elif len(tokens) > 1 and tokens[0] == 'p' and tokens[1] == 'cnf':
-                    num_vars = int(tokens[2])
-                    num_clauses = int(tokens[3])
+            # Parse clauses
+            for line in lines[1:]:
+                clause = [int(x) for x in line.strip().split()[:-1]]
+                cnf.append(clause)
 
-                # Read the clauses
-                elif len(tokens) > 0:
-                    clause = [int(literal) for literal in tokens[:-1]]  # Discard the '0' at the end
-                    cnf.append(clause)
-
-    except FileNotFoundError:
-        print(f"File not found: {path}")
-        return [], 0, 0
-
-    return cnf, num_vars, num_clauses
-
-def decide_assignment(assignments, unassigned_vars, guesses):
-    # Select the next unassigned variable and assign it to true.
-    var = unassigned_vars.pop()
-    assignments.append(var)
-    guesses.add(var)  # Add the variable to the guesses set.
-    return assignments, unassigned_vars, guesses
+            # print(f"{n_vars} {m_clauses} {cnf}")
+    except:
+        print("invalid path")
+        sys.exit(1)
+    return cnf, n_vars, m_clauses
 
 
-def backtrack_assignment(assignments, unassigned_vars, guesses):
-    # Remove the last decision variable assignment/
-    for literal in guesses:
-        is_last_guess = True
-        index = assignments.index(literal)
-        for i in range(index + 1, len(assignments) - 1):
-            if assignments[i] in guesses:
-                is_last_guess = False  # There is a newer guess.
-                break
+def clause_satisfication(clause, assignment):
+    for literal in clause:
+        if literal > 0:
+            if assignment[literal - 1] == True:
+                return True
+        else:
+            if assignment[-literal - 1] == False:
+                return True
+    return False
 
-        if is_last_guess:  # No newer guess.
-            # Remove the last guess and the assignments after it from the assignments list.
-            unassigned_vars.extend(abs(var) for var in assignments[index + 1:])
-            assignments = assignments[0:index]
+def print_assignment_dpll(assignment):
+    print("sat")
+    for idx,value in enumerate(assignment,start=1):
+        if value>0:
+            print(f"{idx}: true",end="\n")
+        else:
+            print(f"{idx}: false",end="\n")
+def print_assignment(assignment):
+    print("sat")
+    for idx, value in enumerate(assignment, start=1):
+        if value is True:
+            print(f"{idx}: true", end="\n")
+        else:
+            print(f"{idx}: false", end="\n")
 
-            # Change the guess for the last guess and remove it from the guesses set..
-            assignments.append(-1 * literal)
-            guesses.remove(literal)
-            return assignments, unassigned_vars, guesses
+def naive_solve(cnf, n_vars, n_clauses):
+    # Generate all possible truth value assignments for the variables
+    all_assignments = itertools.product([False, True], repeat=n_vars)
+    for assignment in all_assignments:
+        if all(clause_satisfication(clause, assignment) for clause in cnf):
+            print_assignment(assignment)
+            break
+    else:
+        print("unsat")
 
 
-def unit_propagate(clauses, assignments, unassigned_vars, num_vars):
-    unsatisfied_clauses = clauses.copy()
-
-    # Remove all satisfied clauses.
-    for literal in assignments:
+def get_unsatisfied_clauses(cnf, assigned):
+    unsatisfied_clauses = cnf.copy()
+    for literal in assigned:
         for clause in unsatisfied_clauses:
             if literal in clause:
                 unsatisfied_clauses.remove(clause)
+    return unsatisfied_clauses
+
+
+def backtrack(assigned, unassigned, d):
+    # get the index of the last "decide" literal
+    guess_index = assigned.index(d[-1])
+    # place all the literals after the guess back to unassigned list
+    for i in range(guess_index + 1, len(assigned)):
+        unassigned.append(abs(assigned[i]))
+    # remove guess and all literals after guess from assigned list
+    assigned = assigned[:guess_index]
+    # change guess to its complement and append to assigned list
+    assigned.append(-d[-1])
+    # remove guess from d
+    d.pop()
+    return assigned, unassigned, d
+
+
+def decide(assigned, unassigned, d):
+    if len(unassigned) == 0:
+        return True, assigned, unassigned
+    literal = unassigned.pop()
+    assigned.append(literal)
+    d.append(literal)
+    return assigned, unassigned, d
+
+
+def unit_propogate(cnf, assigned, unassigned):
+    unsatisfied_clauses = get_unsatisfied_clauses(cnf, assigned)
     while True:
-        unit_clause = None
+        if len(unsatisfied_clauses) == 0:
+            return True, assigned, unassigned
+        chosen_clause = None
         for clause in unsatisfied_clauses:
-            unassigned_count = 0  # Counts unassigned variables in the clause.
-            unassigned_var = None
+            count_unassigned_literals = 0
+            unassigned_literal = None
+
             for literal in clause:
                 var = abs(literal)
-                if literal not in assignments and -1 * literal not in assignments:  # variable is not assigned.
-                    unassigned_count += 1
-                    unassigned_var = var
-            if unassigned_count == 0:
-                # All literals in the clause are assigned, and the clause is not satisfied. Stop propagate.
-                return False, assignments
-            elif unassigned_count == 1:
-                # Unit clause found, assign the unassigned literal.
-                unit_clause = (clause, unassigned_var)
+                if var in unassigned:
+                    count_unassigned_literals += 1
+                    unassigned_literal = literal
+            # the clause is unsatisfiable because all literals are assigned and the result is false
+            if count_unassigned_literals == 0:
+                return False, assigned, unassigned
+            # one literal is not assigned so it must be evaluated True
+            if count_unassigned_literals == 1:
+                chosen_clause = [clause, unassigned_literal]
                 break
 
-        if unit_clause is None:
-            # No unit clause found, exit the loop - Can't propagate anymore.
-            break
-
-        # Assign the literal in the unit clause
-        clause, var = unit_clause
-        literal = next(lit for lit in clause if abs(lit) == var)
-        assignments.append(literal)
-        unassigned_vars.remove(var)
-        # Remove satisfied clauses
-        unsatisfied_clauses = [c for c in unsatisfied_clauses if literal not in c]
-    #print(clauses)
-    #print(counter)
-    #true_clauses = clauses
-    if len(assignments) == num_vars:
-        print("sat")
-        list_of_vars=[]
-        duplicate_vars=[]
-        for c in clauses:
-            for v in c:
-                list_of_vars.append(v)
-        list_of_vars=sorted(list_of_vars, key=abs)
-        for v in list_of_vars:
-            if abs(v) in duplicate_vars:
-                continue
-            else:
-                duplicate_vars.append(v)
-                if v<0:
-                    v=abs(v)
-                    print(f"{v}: false ", end="\n")
-                else:
-                    print(f"{v}: true ", end="\n")
-    return True, assignments
-
-
-def dpll_solve(cnf, num_vars, num_clauses):
-    assignments = []
-
-    unassigned_vars = list(range(1, num_vars + 1))
-    guesses = set()  # Set of guesses.
-    while True:
-        if unit_propagate(cnf, assignments, unassigned_vars,num_vars)[0]:  # Try to propogate.
-            if len(assignments) == num_vars:
-                # All variables are assigned, and and clauses are satisfied. The assignment satisfies the formula.
-                return True
-            else:
-                # No clause is unsatisfied, but not all variables are assigned. Make a decision on the next variable
-                # assignment.
-                assignments, unassigned_vars, guesses = decide_assignment(assignments, unassigned_vars, guesses)
+        if chosen_clause is None:
+            return True, assigned, unassigned
         else:
-            if len(guesses) == 0:
-                # Not all clauses are satisfied, but no assignment is a guess. The formula is unsatisfiable.
-                return False
+            literal = chosen_clause[1]
+            unassigned.remove(abs(literal))
+            assigned.append(literal)
+            unsatisfied_clauses = [clause for clause in unsatisfied_clauses if literal not in clause]
+
+# input cnf: a formula
+# input n_vars: the number of variables in the formula
+# input n_clauses: the number of clauses in the formula
+# output: True if cnf is satisfiable, False otherwise
+def dpll_solve(cnf, n_vars, n_clauses):
+    assigned = []
+    unassigned = list(range(1, n_vars + 1))
+    d = []
+
+    while True:
+        #first trying to poropogate
+        is_propogated, assigned, unassigned = unit_propogate(cnf, assigned, unassigned)
+        if is_propogated:
+            if len(assigned) == n_vars:
+                print_assignment_dpll(assigned)
+                return
+                #return True,assigned
+            # propagate success, now trying to guess (decide)
+            assigned, unassigned, d = decide(assigned, unassigned, d)
+            # now trying to backtrack
+        else:
+            if len(d) == 0:
+                print("unsat")
+                return
             else:
-                # Not all clauses are satisfied, but there is an assignment which is a guess. Backtrack to the
-                # previous decision level.
-                assignments, unassigned_vars, guesses = backtrack_assignment(assignments, unassigned_vars, guesses)
-
-
-def naive_solve(cnf, num_vars, num_clauses):
-    optional_assignment = itertools.product([False, True], repeat=num_vars)  # All possible assignments.
-    for assignment in optional_assignment:
-        is_ass_true = True  # Formula is satisfable if all clauses are satisfied.
-        for clause in cnf:
-            is_clause_true = False
-            for literal in clause:
-                var = abs(literal)
-                if literal > 0:  # If positive literal.
-                    value = assignment[var - 1]
-                else:
-                    value = not assignment[var - 1]
-                if value:  # If literal assigned to True.
-                    is_clause_true = True  # The clause is satisfied if at least one of its literals assigned to True.
-                    break
-            if not is_clause_true:  # If one clause is not satisfied, then formula is unsatisfiable.
-                is_ass_true = False
-                break
-        if is_ass_true:
-            print("sat")
-            for idx, value in enumerate(assignment, start=1):
-                if value is True:
-                    print(f"{idx}: true", end="\n")
-                else:
-                    print(f"{idx}: false", end="\n")
-            return True
-    return False
-
+                assigned, unassigned, d = backtrack(assigned, unassigned, d)
+######################################################################
 
 if __name__ == '__main__':
     if len(sys.argv) != 3:
-        print("Usage: python your_script.py <path_to_cnf_file> <algorithm>")
+        print("expecting 2 arguments")
         sys.exit(1)
-
-        # get path to cnf file from the command line
+    # get path to cnf file from the command line
     path = sys.argv[1]
 
-    # Get algorithm from the command line
+    # get algorithm from the command line
     algorithm = sys.argv[2]
 
     # make sure that algorithm is either "naive" or "dpll"
@@ -196,15 +181,6 @@ if __name__ == '__main__':
     # check satisfiability based on the chosen algorithm
     # and print the result
     if algorithm == "naive":
-        answer = naive_solve(cnf, num_vars, num_clauses)
-        if answer is True:
-            pass
-        else:
-            print("unsat")
-
+        naive_solve(cnf, num_vars, num_clauses)
     else:
-        answer = dpll_solve(cnf, num_vars, num_clauses)
-        if answer is True:
-            pass
-        else:
-            print("unsat")
+        dpll_solve(cnf, num_vars, num_clauses)
